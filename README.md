@@ -76,16 +76,8 @@ Optional: Cairo PDF for high-quality PDF export (`ggsave(..., device = cairo_pdf
 ## Data and versioning
 
 - This repository does not include original CT data or masks.
-- `.gitignore` is configured to ignore `*.csv`, `*.png`, and `*.pdf` by default (adjust if you wish to track outputs).
-
-## Citation
-
-If you use this code or figures, please cite the paper:
-
-> “Comparison of Automated Brain Extraction Methods in over 5000 CT Scans,” authors, venue, year. [Add DOI or URL]
-
-You can also cite specific tooling (e.g., SynthStrip, Robust-CT-BET) as appropriate.
+- `.gitignore` is configured to ignore `*.csv`, `*.png` by default (adjust if you wish to track outputs).
 
 ## Acknowledgments
-
-We acknowledge the authors and maintainers of the brain extraction methods evaluated (CTBET, Robust-CT-BET, SynthStrip, HD-CTBET, CT_BET, Brainchop, CTbet-Docker). This repo provides analysis code and derived results/figures only; obtain original tools/data from their respective sources.
+We thank the MISTIE III trial investigators and participants for providing the dataset used in this analysis. We acknowledge the contribution of all clinical sites and research
+coordinators involved in data collection. We acknowledge the authors and maintainers of the brain extraction methods evaluated (CTBET, Robust-CT-BET, SynthStrip, HD-CTBET, CT_BET, Brainchop, CTbet-Docker). This repo provides analysis code and derived results/figures only; obtain original tools/data from their respective sources.
