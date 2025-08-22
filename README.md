@@ -1,4 +1,4 @@
-# Brain Extraction Analysis — Code for "Comparison of Automated Brain Extraction Methods in over 5000 CT Scans"
+# Brain Extraction Analysis — Comparison of Automated Brain Extraction Methods in over 5000 CT Scans
 
 This repository contains code and analysis assets used to compare multiple automated CT brain extraction/skull-stripping methods at scale. It accompanies the paper “Comparison of Automated Brain Extraction Methods in over 5000 CT Scans” and provides:
 - Quantitative rim-intensity metrics to assess mask quality (e.g., rim volume, HU tail metrics, bone/air fractions)
