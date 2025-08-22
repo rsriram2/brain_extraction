@@ -1,3 +1,4 @@
 # Only ignore CSV and PNG files (case-insensitive)
 *.csv
 *.png
+*.pdf
