@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import nibabel as nib
 from scipy.ndimage import binary_erosion, binary_dilation
+from collections import Counter
 
 # -------------------
 # Helpers
@@ -12,12 +13,11 @@ def root_from_path(p: str) -> str:
     return os.path.basename(p).replace('.nii.gz','').replace('.nii','')
 
 def voxel_volume_ml_from_img(img: nib.Nifti1Image) -> float:
-    # Item 5: use header.get_zooms (mm). 1 mL = 1000 mm^3
     sx, sy, sz = img.header.get_zooms()[:3]
-    return float((sx * sy * sz) / 1000.0)
+    return float((sx * sy * sz) / 1000.0)  # mm^3 -> mL
 
 def get_ct_metadata(ct_img: nib.Nifti1Image, stem: str) -> dict:
-    data = ct_img.get_fdata(dtype=np.float32)  # applies slope/intercept
+    data = ct_img.get_fdata(dtype=np.float32)
     vox_ml = voxel_volume_ml_from_img(ct_img)
     slope = getattr(ct_img.dataobj, "slope", None)
     inter = getattr(ct_img.dataobj, "inter", None)
@@ -36,18 +36,21 @@ def get_ct_metadata(ct_img: nib.Nifti1Image, stem: str) -> dict:
     }
 
 def rim_metrics_from_mask(ct_img: nib.Nifti1Image, mask_path: str, method: str, r: int = 1,
-                          bone: float = 70.0, air: float = -200.0, brain_min: float = 20.0, brain_max: float = 60.0) -> dict:
-    # Item 6: load CT once and reuse. Mask loaded here.
-    ct = ct_img.get_fdata(dtype=np.float32)  # already scaled to HU
+                          bone: float = 70.0, air: float = -200.0,
+                          brain_min: float = 20.0, brain_max: float = 60.0) -> dict:
+    # CT once, mask now
+    ct = ct_img.get_fdata(dtype=np.float32)
     vox_ml = voxel_volume_ml_from_img(ct_img)
     stem = root_from_path(ct_img.get_filename())
     subject_id = stem.split('_')[0]
 
     m_img = nib.load(mask_path)
+    m = m_img.get_fdata()
+    mask_bin = m > 0.5
 
-    # 2. Check for affine equality
-    if not np.allclose(ct_img.affine, m_img.affine):
-        print(f"Affine mismatch for CT: {stem}, method: {method}. Skipping.")
+    # Require only shape equality; ignore affine
+    if mask_bin.shape != ct_img.shape:
+        # Return a typed NaN row rather than raising
         return {
             "subject_id": subject_id, "stem": stem, "method": method, "r": r,
             "rim_vol_ml": np.nan, "p95": np.nan, "p99": np.nan,
@@ -56,22 +59,15 @@ def rim_metrics_from_mask(ct_img: nib.Nifti1Image, mask_path: str, method: str, 
             "n_rim_vox": np.nan,
             "outer_vol_ml": np.nan, "frac_brain_out": np.nan,
             "hu_slope": getattr(ct_img.dataobj, "slope", None),
-            "hu_intercept": getattr(ct_img.dataobj, "inter", None)
+            "hu_intercept": getattr(ct_img.dataobj, "inter", None),
         }
 
-    m = m_img.get_fdata()  # may be float
-    mask_bin = m > 0.5      # Item 3: binarize via threshold
-
-    if mask_bin.shape != ct_img.shape:
-        raise ValueError(f"Mask shape {mask_bin.shape} != CT shape {ct_img.shape} for {mask_path}")
-
-    # Item 4: isotropic 3x3x3 structuring element
+    # Structuring element
     selem = np.ones((3, 3, 3), dtype=bool)
-    
+
     # Inner rim (inclusion)
     rim = mask_bin & ~binary_erosion(mask_bin, structure=selem, iterations=r)
-    
-    # 1. Outer rim (omission)
+    # Outer rim (omission)
     outer_rim = binary_dilation(mask_bin, structure=selem, iterations=r) & ~mask_bin
 
     vals = ct[rim]
@@ -95,7 +91,7 @@ def rim_metrics_from_mask(ct_img: nib.Nifti1Image, mask_path: str, method: str, 
     vol_air_ml  = float((vals <= air).sum() * vox_ml)
     frac_bone   = float(vol_bone_ml / rim_vol_ml) if rim_vol_ml > 0 else np.nan
     frac_air    = float(vol_air_ml / rim_vol_ml) if rim_vol_ml > 0 else np.nan
-    
+
     outer_vol_ml = float(outer_rim.sum() * vox_ml)
     frac_brain_out = float(np.mean((vals_outer >= brain_min) & (vals_outer <= brain_max))) if vals_outer.size > 0 else np.nan
 
@@ -112,7 +108,7 @@ def rim_metrics_from_mask(ct_img: nib.Nifti1Image, mask_path: str, method: str, 
         "outer_vol_ml": outer_vol_ml,
         "frac_brain_out": frac_brain_out,
         "hu_slope": getattr(ct_img.dataobj, "slope", None),
-        "hu_intercept": getattr(ct_img.dataobj, "inter", None)
+        "hu_intercept": getattr(ct_img.dataobj, "inter", None),
     }
 
 # -------------------
@@ -131,47 +127,52 @@ method_dirs = {
     'CT_BET': '/dcs05/ciprian/smart/mistie_3/data/brain_mask_ctbet',
 }
 out_dir = '/users/rsriramb/brain_extraction/results/quantitative'
-
 os.makedirs(out_dir, exist_ok=True)
 
 # -------------------
-# Build stem→path maps (Item 1)
+# Build stem→path maps
 # -------------------
-
 ct_files = glob.glob(os.path.join(ct_dir, '*ct.nii.gz'))
 ct_map = {root_from_path(p): p for p in ct_files}
 assert len(ct_map) == len(set(map(root_from_path, ct_files))), "Duplicate CT stems"
 
-# Build mask maps for all methods
 mask_maps = {}
 for method, mdir in method_dirs.items():
     files = glob.glob(os.path.join(mdir, '*ct.nii.gz'))
     mask_maps[method] = {root_from_path(p): p for p in files}
     assert len(mask_maps[method]) == len(set(mask_maps[method].keys())), f"Duplicate stems for {method}"
 
-# Find intersection of stems present in CT and all mask methods
-common_stems = set(ct_map.keys())
-for m in mask_maps.values():
-    common_stems &= set(m.keys())
-common_stems = sorted(common_stems)
+# CT ∩ union(masks), not full-method intersection
+mask_union = set().union(*[set(m.keys()) for m in mask_maps.values()]) if mask_maps else set()
+common_stems = sorted(set(ct_map.keys()) & mask_union)
 
 # -------------------
 # Run
 # -------------------
 meta_rows = []
 metric_rows = []
-
+counts_present = Counter()       # method -> usable masks seen
+counts_shape_mismatch = Counter()  # method -> shape mismatch
 
 for stem in common_stems:
     ct_path = ct_map[stem]
     ct_img = nib.load(ct_path)
 
-    # Metadata per CT (only once per stem)
+    # Metadata per CT
     meta_rows.append(get_ct_metadata(ct_img, stem))
 
-    # Metrics for all methods
+    # Metrics for available methods
     for method, mask_map in mask_maps.items():
-        metric_rows.append(rim_metrics_from_mask(ct_img, mask_map[stem], method=method, r=1))
+        mp = mask_map.get(stem)
+        if mp is None:
+            continue
+        # Compute metrics; track shape mismatches via NaN n_rim_vox
+        row = rim_metrics_from_mask(ct_img, mp, method=method, r=1)
+        metric_rows.append(row)
+        if np.isnan(row["n_rim_vox"]):
+            counts_shape_mismatch[method] += 1
+        else:
+            counts_present[method] += 1
 
 # -------------------
 # Save
@@ -179,11 +180,24 @@ for stem in common_stems:
 all_metadata = pd.DataFrame(meta_rows)
 all_metrics  = pd.DataFrame(metric_rows)
 
-# 3. Subject-level aggregation
-subj_metrics = all_metrics.groupby(['subject_id', 'method']).mean().reset_index()
+# Subject-level aggregation, NaN-safe
+subj_metrics = (all_metrics
+                .groupby(['subject_id', 'method'], as_index=False, dropna=False)
+                .mean(numeric_only=True))
+
+# Per-method counts
+counts_df = (pd.DataFrame({
+                "method": list(method_dirs.keys()),
+                "n_scans_used": [counts_present[m] for m in method_dirs.keys()],
+                "n_shape_mismatch": [counts_shape_mismatch[m] for m in method_dirs.keys()],
+             })
+             .sort_values("method"))
 
 all_metadata.to_csv(os.path.join(out_dir, 'all_metadata.csv'), index=False)
 all_metrics.to_csv(os.path.join(out_dir, 'rim_metrics_r1_scan.csv'), index=False)
 subj_metrics.to_csv(os.path.join(out_dir, 'rim_metrics_r1_subj.csv'), index=False)
+counts_df.to_csv(os.path.join(out_dir, 'counts_per_method.csv'), index=False)
 
 print(f"Saved {len(all_metadata)} CT metadata rows, {len(all_metrics)} scan-level metric rows, and {len(subj_metrics)} subject-level metric rows.")
+print("Counts per method:")
+print(counts_df.to_string(index=False))
