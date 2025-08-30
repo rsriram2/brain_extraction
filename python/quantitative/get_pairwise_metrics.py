@@ -102,6 +102,10 @@ for m, mp in method_maps.items():
         all_stems.setdefault(s, set()).add(m)
 candidate_stems = sorted([s for s, ms in all_stems.items() if len(ms) >= 2])
 
+exclude = ['6109-317_20150302_0647_ct', '6142-308_20150610_0707_ct', '6193-324_20150924_1431_ct', '6257-335_20160118_1150_ct',
+                     '6418-193_20161228_1248_ct', '6470-296_20170602_0607_ct', '6480-154_20170622_0937_ct']
+candidate_stems = [s for s in candidate_stems if s not in exclude]
+
 rows = []
 for s in candidate_stems:
     imgs, masks = {}, {}
@@ -195,7 +199,8 @@ ci_df.to_csv(OUT_CSV_CI, index=False)
 print(f"[bootstrap] saved -> {OUT_CSV_CI}")
 
 methods = sorted(set(list(df["method_A"]) + list(df["method_B"])))
-mat = pd.DataFrame(np.eye(len(methods)), index=methods, columns=methods, dtype=float)
+mat = pd.DataFrame(np.full((len(methods), len(methods)), np.nan),
+                   index=methods, columns=methods, dtype=float)
 for _, r in pair_stats.iterrows():
     a, b, v = r["method_A"], r["method_B"], r["point"]
     mat.loc[a,b] = mat.loc[b,a] = v
