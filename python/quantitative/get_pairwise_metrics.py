@@ -8,7 +8,7 @@ from typing import Tuple, Dict, List
 from scipy.stats import bootstrap
 import matplotlib.pyplot as plt
 
-DATA_DIR = "/dcs05/ciprian/smart/mistie_3/data"
+DATA_DIR = "/users/rsriramb/brain_extraction/data"
 METHOD_DIRS = {
     'SynthStrip': '/dcs05/ciprian/smart/mistie_3/data/brain_mask_synth',
     'Robust-CTBET': '/dcs05/ciprian/smart/mistie_3/data/brain_mask',
