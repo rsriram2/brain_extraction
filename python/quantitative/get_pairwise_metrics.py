@@ -7,6 +7,8 @@ import nibabel as nib
 from typing import Tuple, Dict, List
 from scipy.stats import bootstrap
 import matplotlib.pyplot as plt
+from medpy.metric import binary as medpy_binary
+from medpy.metric.binary import hd95 as medpy_hd95
 
 DATA_DIR = "/users/rsriramb/brain_extraction/results/quantitative/"
 METHOD_DIRS = {
@@ -72,6 +74,11 @@ def kappa(tp, fp, fn, tn):
     den = 1 - pe
     return (po - pe)/den if den else np.nan
 
+
+def voxel_volume_ml_from_img(img: nib.Nifti1Image) -> float:
+    sx, sy, sz = img.header.get_zooms()[:3]
+    return float((sx * sy * sz) / 1000.0)
+
 def bootstrap_ci(vals: np.ndarray, B: int = 2000, alpha: float = 0.05, use_median: bool = True):
     if len(vals) == 0:
         return np.nan, np.nan
@@ -135,6 +142,37 @@ for s in candidate_stems:
     for A, B in itertools.combinations(methods_here, 2):
         a, b = masks[A], masks[B]
         tp, fp, fn, tn = confusion_2x2(a, b)
+
+        # symmetric sensitivity/specificity: average A->B and B->A
+        sens_A_B = sensitivity(tp, fn)
+        sens_B_A = sensitivity(tp, fp) if False else None  # placeholder
+        # compute both directions properly using masks
+        sens_AB = sensitivity(np.count_nonzero(a & b), np.count_nonzero(a & ~b))
+        sens_BA = sensitivity(np.count_nonzero(a & b), np.count_nonzero(b & ~a))
+        spec_AB = specificity(np.count_nonzero(~a & ~b), np.count_nonzero(a & ~b))
+        spec_BA = specificity(np.count_nonzero(~a & ~b), np.count_nonzero(b & ~a))
+        sensitivity_sym = np.nanmean([sens_AB, sens_BA])
+        specificity_sym = np.nanmean([spec_AB, spec_BA])
+
+        # surface-based metrics (MSD, HD95) in mm
+        imgA = imgs[A]
+        imgB = imgs[B]
+        # compute MSD and HD95 using MedPy (assume medpy is installed)
+        spacing = tuple(map(float, imgA.header.get_zooms()[:3]))
+        msd = float(medpy_binary.asd(a.astype(bool), b.astype(bool), voxelspacing=spacing))
+        # compute HD95 using MedPy's hd95 helper
+        try:
+            hd95 = float(medpy_hd95(a.astype(bool), b.astype(bool), voxelspacing=spacing))
+        except Exception:
+            hd95 = np.nan
+
+        # ICV (mL)
+        vox_ml = voxel_volume_ml_from_img(imgA)
+        icv_A = float(a.sum() * vox_ml)
+        icv_B = float(b.sum() * vox_ml)
+        delta_icv_ml = icv_A - icv_B
+        delta_icv_pct = (delta_icv_ml / icv_B * 100.0) if icv_B else np.nan
+
         rows.append({
             "patient_id": pid,
             "stem": s,
@@ -142,10 +180,14 @@ for s in candidate_stems:
             "tp": tp, "fp": fp, "fn": fn, "tn": tn,
             "dice": dice(tp, fp, fn),
             "iou": iou(tp, fp, fn),
-            "accuracy": accuracy(tp, fp, fn, tn),
-            "sensitivity_A_vs_B": sensitivity(tp, fn),
-            "specificity_A_vs_B": specificity(tn, fp),
-            "kappa": kappa(tp, fp, fn, tn),
+            "sensitivity_sym": sensitivity_sym,
+            "specificity_sym": specificity_sym,
+            "msd_mm": msd,
+            "hd95_mm": hd95,
+            "icv_A_ml": icv_A,
+            "icv_B_ml": icv_B,
+            "delta_icv_ml": delta_icv_ml,
+            "delta_icv_pct": delta_icv_pct,
             "n_vox": int(tp+fp+fn+tn)
         })
 
@@ -155,7 +197,7 @@ df.to_csv(OUT_CSV_RAW, index=False)
 print(f"[raw] scans: {len(set(df['stem']))}  pairs: {len(df)}  rows saved -> {OUT_CSV_RAW}")
 
 # ===== run pipeline for multiple metrics and aggregations =====
-METRICS = ['dice', 'iou']
+METRICS = ['dice', 'iou', 'sensitivity_sym', 'specificity_sym', 'msd_mm', 'hd95_mm', 'delta_icv_ml', 'delta_icv_pct']
 AGGRS = ['mean', 'median']
 
 for metric in METRICS:
@@ -163,14 +205,20 @@ for metric in METRICS:
         outdir = os.path.join(DATA_DIR, metric, aggr)
         os.makedirs(outdir, exist_ok=True)
 
-        # collapse scans -> patient using chosen aggregation
-        scan2pat = df.groupby(["patient_id", "method_A", "method_B"], as_index=False)[metric].agg(aggr)
+        # collapse scans -> patient using chosen aggregation, dropping NaNs
+        def agg_func(x):
+            arr = x.dropna().to_numpy()
+            if arr.size == 0:
+                return np.nan
+            return np.nanmedian(arr) if aggr == 'median' else np.nanmean(arr)
+
+        scan2pat = df.groupby(["patient_id", "method_A", "method_B"], as_index=False)[metric].agg(agg_func)
         scan2pat.rename(columns={metric: f"{metric}_patient"}, inplace=True)
 
         # cohort-level point estimates (per pair)
         pair_stats = (scan2pat
                       .groupby(["method_A", "method_B"], as_index=False)[f"{metric}_patient"]
-                      .agg(point=(lambda x: np.median(x) if aggr == "median" else np.mean(x)),
+                      .agg(point=(lambda x: np.nanmedian(x) if aggr == "median" else np.nanmean(x)),
                            n_patients=("count")))
 
         pair_csv = os.path.join(outdir, f"pairwise_patient_agg_{metric}_{aggr}.csv")
@@ -178,12 +226,16 @@ for metric in METRICS:
 
         # bootstrap CIs (patient-level)
         ci_rows = []
-        use_median = (aggr == "median")
+        # prefer median for HD95 and MSD, otherwise follow aggr
+        use_median = True if metric in ("hd95_mm", "msd_mm") else (aggr == "median")
         for (A, B), g in scan2pat.groupby(["method_A", "method_B"]):
             v = g[f"{metric}_patient"].to_numpy()
+            v = v[~np.isnan(v)]
             if v.size == 0:
+                lo = hi = point = np.nan
+            elif v.size == 1:
+                point = float(np.mean(v))
                 lo = hi = np.nan
-                point = np.nan
             else:
                 stat_fun = np.median if use_median else np.mean
                 res = bootstrap(
@@ -266,7 +318,7 @@ for metric in METRICS:
                 continue
             merged = pd.concat(parts, axis=0, ignore_index=True)
             # per patient: aggregate across pairs that include method m using aggr
-            per_patient = merged.groupby("patient_id", as_index=False)["val"].agg(aggr)
+            per_patient = merged.groupby("patient_id", as_index=False)["val"].agg(lambda x: np.nanmedian(x) if aggr == 'median' else np.nanmean(x))
             v = per_patient["val"].to_numpy()
             v = v[~np.isnan(v)]
             n = v.size
