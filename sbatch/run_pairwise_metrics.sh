@@ -28,7 +28,7 @@ NUM_SHARDS=100
 SHARD_ID=${SLURM_ARRAY_TASK_ID}
 
 # Output directory for partial shard CSVs (should be a fast shared location or scratch)
-OUT_DIR="/scratch/$USER/pairwise_shards"
+OUT_DIR="/users/rsriramb/brain_extraction/results/quantitative/pairwise_shards"
 mkdir -p "$OUT_DIR"
 OUT_PARTIAL="${OUT_DIR}/pairwise_shard_${SHARD_ID}.csv"
 
