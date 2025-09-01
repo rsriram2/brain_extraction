@@ -1,10 +1,11 @@
+import argparse
 import pandas as pd
 import numpy as np
 import os
 import glob
 import itertools
 import nibabel as nib
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Optional
 from scipy.stats import bootstrap
 import matplotlib.pyplot as plt
 from medpy.metric import binary as medpy_binary
@@ -96,105 +97,110 @@ def bootstrap_ci(vals: np.ndarray, B: int = 2000, alpha: float = 0.05, use_media
     return float(res.confidence_interval.low), float(res.confidence_interval.high)
 
 # ===== discover stems and compute per-scan pairwise rows =====
-method_files = {m: glob.glob(os.path.join(d, "*.nii*")) for m,d in METHOD_DIRS.items()}
-method_maps  = {m: {stem(p): p for p in files} for m,files in method_files.items()}
 
-# stems present in ≥2 methods
-all_stems: Dict[str, set] = {}
-for m, mp in method_maps.items():
-    for s in mp.keys():
-        all_stems.setdefault(s, set()).add(m)
-candidate_stems = sorted([s for s, ms in all_stems.items() if len(ms) >= 2])
+def main(limit_scans: Optional[int] = None, method_files: Optional[Dict[str, List[str]]] = None, out_csv: Optional[str] = None):
+    # allow tests to inject method_files; otherwise glob from METHOD_DIRS
+    method_files = method_files if method_files is not None else {m: glob.glob(os.path.join(d, "*.nii*")) for m,d in METHOD_DIRS.items()}
+    method_maps  = {m: {stem(p): p for p in files} for m,files in method_files.items()}
 
-exclude = {
-    '6109-317_20150302_0647_ct','6142-308_20150610_0707_ct','6193-324_20150924_1431_ct',
-    '6257-335_20160118_1150_ct','6418-193_20161228_1248_ct','6470-296_20170602_0607_ct',
-    '6480-154_20170622_0937_ct'
-}
+    # stems present in ≥2 methods
+    all_stems: Dict[str, set] = {}
+    for m, mp in method_maps.items():
+        for s in mp.keys():
+            all_stems.setdefault(s, set()).add(m)
+    candidate_stems = sorted([s for s, ms in all_stems.items() if len(ms) >= 2])
 
-exclude_prefixes = ("6046", "6084", "6096", "6246", "6315", "6342", "6499")
-candidate_stems = [
-    s for s in candidate_stems 
-    if s not in exclude and not patient_id_from_stem(s).startswith(exclude_prefixes)
-]
+    exclude = {
+        '6109-317_20150302_0647_ct','6142-308_20150610_0707_ct','6193-324_20150924_1431_ct',
+        '6257-335_20160118_1150_ct','6418-193_20161228_1248_ct','6470-296_20170602_0607_ct',
+        '6480-154_20170622_0937_ct'
+    }
 
-rows = []
-for s in candidate_stems:
-    imgs, masks = {}, {}
-    aff, shape = None, None
-    methods_here = sorted(all_stems[s])
-    # load and check geometry
-    ok = True
-    for m in methods_here:
-        p = method_maps[m][s]
-        img, arr = load_mask_bool(p)
-        if shape is None:
-            shape, aff = img.shape, img.affine
-        else:
-            if img.shape != shape or not np.allclose(img.affine, aff, atol=1e-3):
-                ok = False; break
-        imgs[m], masks[m] = img, arr
-    if not ok:
-        continue
+    exclude_prefixes = ("6046", "6084", "6096", "6246", "6315", "6342", "6499")
+    candidate_stems = [
+        s for s in candidate_stems 
+        if s not in exclude and not patient_id_from_stem(s).startswith(exclude_prefixes)
+    ]
 
-    pid = patient_id_from_stem(s)
-    # pairwise metrics (per scan)
-    for A, B in itertools.combinations(methods_here, 2):
-        a, b = masks[A], masks[B]
-        tp, fp, fn, tn = confusion_2x2(a, b)
+    # apply optional limit (for testing / faster runs)
+    if limit_scans is not None:
+        candidate_stems = candidate_stems[:int(limit_scans)]
 
-        # symmetric sensitivity/specificity: average A->B and B->A
-        sens_A_B = sensitivity(tp, fn)
-        sens_B_A = sensitivity(tp, fp) if False else None  # placeholder
-        # compute both directions properly using masks
-        sens_AB = sensitivity(np.count_nonzero(a & b), np.count_nonzero(a & ~b))
-        sens_BA = sensitivity(np.count_nonzero(a & b), np.count_nonzero(b & ~a))
-        spec_AB = specificity(np.count_nonzero(~a & ~b), np.count_nonzero(a & ~b))
-        spec_BA = specificity(np.count_nonzero(~a & ~b), np.count_nonzero(b & ~a))
-        sensitivity_sym = np.nanmean([sens_AB, sens_BA])
-        specificity_sym = np.nanmean([spec_AB, spec_BA])
+    rows = []
+    for s in candidate_stems:
+        imgs, masks = {}, {}
+        aff, shape = None, None
+        methods_here = sorted(all_stems[s])
+        # load and check geometry
+        ok = True
+        for m in methods_here:
+            p = method_maps[m][s]
+            img, arr = load_mask_bool(p)
+            if shape is None:
+                shape, aff = img.shape, img.affine
+            else:
+                if img.shape != shape or not np.allclose(img.affine, aff, atol=1e-3):
+                    ok = False; break
+            imgs[m], masks[m] = img, arr
+        if not ok:
+            continue
 
-        # surface-based metrics (MSD, HD95) in mm
-        imgA = imgs[A]
-        imgB = imgs[B]
-        # compute MSD and HD95 using MedPy (assume medpy is installed)
-        spacing = tuple(map(float, imgA.header.get_zooms()[:3]))
-        msd = float(medpy_binary.asd(a.astype(bool), b.astype(bool), voxelspacing=spacing))
-        # compute HD95 using MedPy's hd95 helper
-        try:
-            hd95 = float(medpy_hd95(a.astype(bool), b.astype(bool), voxelspacing=spacing))
-        except Exception:
-            hd95 = np.nan
+        pid = patient_id_from_stem(s)
+        # pairwise metrics (per scan)
+        for A, B in itertools.combinations(methods_here, 2):
+            a, b = masks[A], masks[B]
+            tp, fp, fn, tn = confusion_2x2(a, b)
 
-        # ICV (mL)
-        vox_ml = voxel_volume_ml_from_img(imgA)
-        icv_A = float(a.sum() * vox_ml)
-        icv_B = float(b.sum() * vox_ml)
-        delta_icv_ml = icv_A - icv_B
-        delta_icv_pct = (delta_icv_ml / icv_B * 100.0) if icv_B else np.nan
+            # symmetric sensitivity/specificity: average A->B and B->A
+            sens_AB = sensitivity(np.count_nonzero(a & b), np.count_nonzero(a & ~b))
+            sens_BA = sensitivity(np.count_nonzero(a & b), np.count_nonzero(b & ~a))
+            spec_AB = specificity(np.count_nonzero(~a & ~b), np.count_nonzero(a & ~b))
+            spec_BA = specificity(np.count_nonzero(~a & ~b), np.count_nonzero(b & ~a))
+            sensitivity_sym = np.nanmean([sens_AB, sens_BA])
+            specificity_sym = np.nanmean([spec_AB, spec_BA])
 
-        rows.append({
-            "patient_id": pid,
-            "stem": s,
-            "method_A": A, "method_B": B,
-            "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-            "dice": dice(tp, fp, fn),
-            "iou": iou(tp, fp, fn),
-            "sensitivity_sym": sensitivity_sym,
-            "specificity_sym": specificity_sym,
-            "msd_mm": msd,
-            "hd95_mm": hd95,
-            "icv_A_ml": icv_A,
-            "icv_B_ml": icv_B,
-            "delta_icv_ml": delta_icv_ml,
-            "delta_icv_pct": delta_icv_pct,
-            "n_vox": int(tp+fp+fn+tn)
-        })
+            # surface-based metrics (MSD, HD95) in mm
+            imgA = imgs[A]
+            imgB = imgs[B]
+            # compute MSD and HD95 using MedPy (assume medpy is installed)
+            spacing = tuple(map(float, imgA.header.get_zooms()[:3]))
+            msd = float(medpy_binary.asd(a.astype(bool), b.astype(bool), voxelspacing=spacing))
+            # compute HD95 using MedPy's hd95 helper
+            try:
+                hd95 = float(medpy_hd95(a.astype(bool), b.astype(bool), voxelspacing=spacing))
+            except Exception:
+                hd95 = np.nan
 
-df = pd.DataFrame(rows)
-print("unique patients:", df["patient_id"].nunique())
-df.to_csv(OUT_CSV_RAW, index=False)
-print(f"[raw] scans: {len(set(df['stem']))}  pairs: {len(df)}  rows saved -> {OUT_CSV_RAW}")
+            # ICV (mL)
+            vox_ml = voxel_volume_ml_from_img(imgA)
+            icv_A = float(a.sum() * vox_ml)
+            icv_B = float(b.sum() * vox_ml)
+            delta_icv_ml = icv_A - icv_B
+            delta_icv_pct = (delta_icv_ml / icv_B * 100.0) if icv_B else np.nan
+
+            rows.append({
+                "patient_id": pid,
+                "stem": s,
+                "method_A": A, "method_B": B,
+                "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+                "dice": dice(tp, fp, fn),
+                "iou": iou(tp, fp, fn),
+                "sensitivity_sym": sensitivity_sym,
+                "specificity_sym": specificity_sym,
+                "msd_mm": msd,
+                "hd95_mm": hd95,
+                "icv_A_ml": icv_A,
+                "icv_B_ml": icv_B,
+                "delta_icv_ml": delta_icv_ml,
+                "delta_icv_pct": delta_icv_pct,
+                "n_vox": int(tp+fp+fn+tn)
+            })
+
+    df = pd.DataFrame(rows)
+    print("unique patients:", df["patient_id"].nunique())
+    out_csv = out_csv if out_csv is not None else OUT_CSV_RAW
+    df.to_csv(out_csv, index=False)
+    print(f"[raw] scans: {len(set(df['stem']))}  pairs: {len(df)}  rows saved -> {out_csv}")
 
 # ===== run pipeline for multiple metrics and aggregations =====
 METRICS = ['dice', 'iou', 'sensitivity_sym', 'specificity_sym', 'msd_mm', 'hd95_mm', 'delta_icv_ml', 'delta_icv_pct']
@@ -345,3 +351,15 @@ for metric in METRICS:
         print(f"[done] metric={metric} aggr={aggr} -> files saved in {outdir}")
 
 print('All metrics processed.')
+
+
+def _parse_args_and_run():
+    p = argparse.ArgumentParser()
+    p.add_argument('--max-scans', type=int, default=None, help='Limit number of scans processed (for tests/quick runs)')
+    p.add_argument('--out-csv', type=str, default=None, help='Override output CSV path')
+    args = p.parse_args()
+    main(limit_scans=args.max_scans, out_csv=args.out_csv)
+
+
+if __name__ == '__main__':
+    _parse_args_and_run()
