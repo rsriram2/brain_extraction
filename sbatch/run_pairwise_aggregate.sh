@@ -6,14 +6,19 @@
 #SBATCH --mem=64G
 #SBATCH --time=02:00:00
 #SBATCH --output=pairwise_aggregate_%j.out
+#SBATCH --error=pairwise_aggregate_%j.err
 
 module load conda
 conda activate my_env
 
 SHARD_DIR="/users/rsriramb/brain_extraction/results/quantitative/pairwise_shards"
-MERGED_CSV="/users/rsriramb/brain_extraction/results/quantitative/agg_pairwise_2x2_metrics_all_scans.csv"
+MERGED_CSV="/users/rsriramb/brain_extraction/results/quantitative/pairwise_2x2_metrics_all_scans.csv"
 
-python /users/rsriramb/brain_extraction/python/quantitative/merge_pairwise_shards.py \
-  --shard-dir "$SHARD_DIR" --out "$MERGED_CSV" --run-aggregate
+PYTHON_SCRIPT="/users/rsriramb/brain_extraction/python/quantitative/merge_pairwise_shards.py"
+
+echo "Merging shard CSVs from $SHARD_DIR -> $MERGED_CSV"
+
+# run merge + aggregate (SBATCH will capture stdout/stderr to the job files)
+python "$PYTHON_SCRIPT" --shard-dir "$SHARD_DIR" --out "$MERGED_CSV" --run-aggregate
 
 echo "Aggregation job finished"
