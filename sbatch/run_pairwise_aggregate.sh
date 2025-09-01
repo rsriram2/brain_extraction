@@ -10,8 +10,8 @@
 module load conda
 conda activate my_env
 
-SHARD_DIR="/scratch/$USER/pairwise_shards"
-MERGED_CSV="/users/rsriramb/brain_extraction/results/quantitative/pairwise_2x2_metrics_all_scans.csv"
+SHARD_DIR="/users/rsriramb/brain_extraction/results/quantitative/pairwise_shards"
+MERGED_CSV="/users/rsriramb/brain_extraction/results/quantitative/agg_pairwise_2x2_metrics_all_scans.csv"
 
 python /users/rsriramb/brain_extraction/python/quantitative/merge_pairwise_shards.py \
   --shard-dir "$SHARD_DIR" --out "$MERGED_CSV" --run-aggregate
