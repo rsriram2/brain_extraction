@@ -206,151 +206,154 @@ def main(limit_scans: Optional[int] = None, method_files: Optional[Dict[str, Lis
 METRICS = ['dice', 'iou', 'sensitivity_sym', 'specificity_sym', 'msd_mm', 'hd95_mm', 'delta_icv_ml', 'delta_icv_pct']
 AGGRS = ['mean', 'median']
 
-for metric in METRICS:
-    for aggr in AGGRS:
-        outdir = os.path.join(DATA_DIR, metric, aggr)
-        os.makedirs(outdir, exist_ok=True)
 
-        # collapse scans -> patient using chosen aggregation, dropping NaNs
-        def agg_func(x):
-            arr = x.dropna().to_numpy()
-            if arr.size == 0:
-                return np.nan
-            return np.nanmedian(arr) if aggr == 'median' else np.nanmean(arr)
+def process_metrics(df: pd.DataFrame):
+    """Process patient-aggregated metrics and write summary CSVs/heatmaps."""
+    for metric in METRICS:
+        for aggr in AGGRS:
+            outdir = os.path.join(DATA_DIR, metric, aggr)
+            os.makedirs(outdir, exist_ok=True)
 
-        scan2pat = df.groupby(["patient_id", "method_A", "method_B"], as_index=False)[metric].agg(agg_func)
-        scan2pat.rename(columns={metric: f"{metric}_patient"}, inplace=True)
+            # collapse scans -> patient using chosen aggregation, dropping NaNs
+            def agg_func(x):
+                arr = x.dropna().to_numpy()
+                if arr.size == 0:
+                    return np.nan
+                return np.nanmedian(arr) if aggr == 'median' else np.nanmean(arr)
 
-        # cohort-level point estimates (per pair)
-        pair_stats = (scan2pat
-                      .groupby(["method_A", "method_B"], as_index=False)[f"{metric}_patient"]
-                      .agg(point=(lambda x: np.nanmedian(x) if aggr == "median" else np.nanmean(x)),
-                           n_patients=("count")))
+            scan2pat = df.groupby(["patient_id", "method_A", "method_B"], as_index=False)[metric].agg(agg_func)
+            scan2pat.rename(columns={metric: f"{metric}_patient"}, inplace=True)
 
-        pair_csv = os.path.join(outdir, f"pairwise_patient_agg_{metric}_{aggr}.csv")
-        pair_stats.to_csv(pair_csv, index=False)
+            # cohort-level point estimates (per pair)
+            pair_stats = (scan2pat
+                          .groupby(["method_A", "method_B"], as_index=False)[f"{metric}_patient"]
+                          .agg(point=(lambda x: np.nanmedian(x) if aggr == "median" else np.nanmean(x)),
+                               n_patients=("count")))
 
-        # bootstrap CIs (patient-level)
-        ci_rows = []
-        # prefer median for HD95 and MSD, otherwise follow aggr
-        use_median = True if metric in ("hd95_mm", "msd_mm") else (aggr == "median")
-        for (A, B), g in scan2pat.groupby(["method_A", "method_B"]):
-            v = g[f"{metric}_patient"].to_numpy()
-            v = v[~np.isnan(v)]
-            if v.size == 0:
-                lo = hi = point = np.nan
-            elif v.size == 1:
-                point = float(np.mean(v))
-                lo = hi = np.nan
-            else:
-                stat_fun = np.median if use_median else np.mean
-                res = bootstrap(
-                    data=(v,),
-                    statistic=stat_fun,
-                    confidence_level=0.95,
-                    n_resamples=2000,
-                    method="percentile",
-                    random_state=0,
-                )
-                lo = float(res.confidence_interval.low)
-                hi = float(res.confidence_interval.high)
-                point = float(stat_fun(v))
+            pair_csv = os.path.join(outdir, f"pairwise_patient_agg_{metric}_{aggr}.csv")
+            pair_stats.to_csv(pair_csv, index=False)
 
-            ci_rows.append({
-                "method_A": A, "method_B": B, "metric": metric,
-                "point": point, "ci_lo": lo, "ci_hi": hi,
-                "n_patients": int(v.size)
-            })
-
-        ci_df = pd.DataFrame(ci_rows)
-        ci_csv = os.path.join(outdir, f"pairwise_{metric}_bootstrap_ci_{aggr}.csv")
-        ci_df.to_csv(ci_csv, index=False)
-
-        # symmetric matrix (point estimates)
-        methods = sorted(set(list(df["method_A"]) + list(df["method_B"])))
-        mat = pd.DataFrame(np.full((len(methods), len(methods)), np.nan), index=methods, columns=methods, dtype=float)
-        for _, r in pair_stats.iterrows():
-            a, b, v = r["method_A"], r["method_B"], r["point"]
-            mat.loc[a, b] = mat.loc[b, a] = v
-
-        mat_csv = os.path.join(outdir, f"{metric}_matrix_point.csv")
-        mat.to_csv(mat_csv)
-
-        # heatmap (masked lower triangle)
-        M = mat.values.astype(float)
-        np.fill_diagonal(M, 1.0)
-        M = (M + M.T) / 2.0
-        mask = np.tri(M.shape[0], k=-1, dtype=bool)
-        M_masked = np.ma.array(M, mask=mask)
-
-        fig, ax = plt.subplots(figsize=(6.5, 6.0))
-        im = ax.imshow(M_masked, interpolation="nearest")
-        labels = list(mat.columns)
-        ax.set_xticks(np.arange(M.shape[1]))
-        ax.set_yticks(np.arange(M.shape[0]))
-        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=10)
-        ax.set_yticklabels(labels, fontsize=10)
-        ax.set_xticks(np.arange(-0.5, M.shape[1], 1), minor=True)
-        ax.set_yticks(np.arange(-0.5, M.shape[0], 1), minor=True)
-        ax.grid(which="minor", color="white", linewidth=1)
-        ax.tick_params(which="minor", bottom=False, left=False)
-
-        for i in range(M.shape[0]):
-            for j in range(M.shape[1]):
-                if i <= j and not np.isnan(M[i, j]):
-                    ax.text(j, i, f"{M[i, j]:.3f}", ha="center", va="center", fontsize=8)
-
-        ax.set_title(f"Pairwise {metric.upper()} (patient-aggregated, {aggr})", fontsize=12, pad=12)
-        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cbar.ax.tick_params(labelsize=10)
-        cbar.set_label(metric.upper(), fontsize=10)
-        ax.set_aspect("equal")
-        plt.tight_layout()
-
-        png_path = os.path.join(outdir, f"{metric}_heatmap_{aggr}.png")
-        pdf_path = os.path.join(outdir, f"{metric}_heatmap_{aggr}.pdf")
-        plt.savefig(png_path, dpi=600, bbox_inches="tight")
-        plt.savefig(pdf_path, dpi=600, bbox_inches="tight")
-        plt.close(fig)
-
-        # macro-average per method
-        macro_rows = []
-        for m in methods:
-            parts = []
+            # bootstrap CIs (patient-level)
+            ci_rows = []
+            # prefer median for HD95 and MSD, otherwise follow aggr
+            use_median = True if metric in ("hd95_mm", "msd_mm") else (aggr == "median")
             for (A, B), g in scan2pat.groupby(["method_A", "method_B"]):
-                if m in (A, B):
-                    parts.append(g[["patient_id", f"{metric}_patient"]].rename(columns={f"{metric}_patient": "val"}))
-            if not parts:
-                continue
-            merged = pd.concat(parts, axis=0, ignore_index=True)
-            # per patient: aggregate across pairs that include method m using aggr
-            per_patient = merged.groupby("patient_id", as_index=False)["val"].agg(lambda x: np.nanmedian(x) if aggr == 'median' else np.nanmean(x))
-            v = per_patient["val"].to_numpy()
-            v = v[~np.isnan(v)]
-            n = v.size
-            if n == 0:
-                point = lo = hi = np.nan
-            elif n == 1:
-                point = float(np.mean(v))
-                lo = hi = np.nan
-            else:
-                point = float(np.median(v) if aggr == "median" else np.mean(v))
-                lo, hi = bootstrap_ci(v, B=2000, alpha=0.05, use_median=(aggr == "median"))
+                v = g[f"{metric}_patient"].to_numpy()
+                v = v[~np.isnan(v)]
+                if v.size == 0:
+                    lo = hi = point = np.nan
+                elif v.size == 1:
+                    point = float(np.mean(v))
+                    lo = hi = np.nan
+                else:
+                    stat_fun = np.median if use_median else np.mean
+                    res = bootstrap(
+                        data=(v,),
+                        statistic=stat_fun,
+                        confidence_level=0.95,
+                        n_resamples=2000,
+                        method="percentile",
+                        random_state=0,
+                    )
+                    lo = float(res.confidence_interval.low)
+                    hi = float(res.confidence_interval.high)
+                    point = float(stat_fun(v))
 
-            macro_rows.append({
-                "method": m,
-                f"macro_{metric}_{aggr}": point,
-                "ci_lo": lo,
-                "ci_hi": hi,
-                "n_patients": int(n),
-            })
+                ci_rows.append({
+                    "method_A": A, "method_B": B, "metric": metric,
+                    "point": point, "ci_lo": lo, "ci_hi": hi,
+                    "n_patients": int(v.size)
+                })
 
-        macro_df = pd.DataFrame(macro_rows)
-        macro_csv = os.path.join(outdir, f"macro_avg_{metric}_{aggr}.csv")
-        macro_df.to_csv(macro_csv, index=False)
-        print(f"[done] metric={metric} aggr={aggr} -> files saved in {outdir}")
+            ci_df = pd.DataFrame(ci_rows)
+            ci_csv = os.path.join(outdir, f"pairwise_{metric}_bootstrap_ci_{aggr}.csv")
+            ci_df.to_csv(ci_csv, index=False)
 
-print('All metrics processed.')
+            # symmetric matrix (point estimates)
+            methods = sorted(set(list(df["method_A"]) + list(df["method_B"])))
+            mat = pd.DataFrame(np.full((len(methods), len(methods)), np.nan), index=methods, columns=methods, dtype=float)
+            for _, r in pair_stats.iterrows():
+                a, b, v = r["method_A"], r["method_B"], r["point"]
+                mat.loc[a, b] = mat.loc[b, a] = v
+
+            mat_csv = os.path.join(outdir, f"{metric}_matrix_point.csv")
+            mat.to_csv(mat_csv)
+
+            # heatmap (masked lower triangle)
+            M = mat.values.astype(float)
+            np.fill_diagonal(M, 1.0)
+            M = (M + M.T) / 2.0
+            mask = np.tri(M.shape[0], k=-1, dtype=bool)
+            M_masked = np.ma.array(M, mask=mask)
+
+            fig, ax = plt.subplots(figsize=(6.5, 6.0))
+            im = ax.imshow(M_masked, interpolation="nearest")
+            labels = list(mat.columns)
+            ax.set_xticks(np.arange(M.shape[1]))
+            ax.set_yticks(np.arange(M.shape[0]))
+            ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=10)
+            ax.set_yticklabels(labels, fontsize=10)
+            ax.set_xticks(np.arange(-0.5, M.shape[1], 1), minor=True)
+            ax.set_yticks(np.arange(-0.5, M.shape[0], 1), minor=True)
+            ax.grid(which="minor", color="white", linewidth=1)
+            ax.tick_params(which="minor", bottom=False, left=False)
+
+            for i in range(M.shape[0]):
+                for j in range(M.shape[1]):
+                    if i <= j and not np.isnan(M[i, j]):
+                        ax.text(j, i, f"{M[i, j]:.3f}", ha="center", va="center", fontsize=8)
+
+            ax.set_title(f"Pairwise {metric.upper()} (patient-aggregated, {aggr})", fontsize=12, pad=12)
+            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=10)
+            cbar.set_label(metric.upper(), fontsize=10)
+            ax.set_aspect("equal")
+            plt.tight_layout()
+
+            png_path = os.path.join(outdir, f"{metric}_heatmap_{aggr}.png")
+            pdf_path = os.path.join(outdir, f"{metric}_heatmap_{aggr}.pdf")
+            plt.savefig(png_path, dpi=600, bbox_inches="tight")
+            plt.savefig(pdf_path, dpi=600, bbox_inches="tight")
+            plt.close(fig)
+
+            # macro-average per method
+            macro_rows = []
+            for m in methods:
+                parts = []
+                for (A, B), g in scan2pat.groupby(["method_A", "method_B"]):
+                    if m in (A, B):
+                        parts.append(g[["patient_id", f"{metric}_patient"]].rename(columns={f"{metric}_patient": "val"}))
+                if not parts:
+                    continue
+                merged = pd.concat(parts, axis=0, ignore_index=True)
+                # per patient: aggregate across pairs that include method m using aggr
+                per_patient = merged.groupby("patient_id", as_index=False)["val"].agg(lambda x: np.nanmedian(x) if aggr == 'median' else np.nanmean(x))
+                v = per_patient["val"].to_numpy()
+                v = v[~np.isnan(v)]
+                n = v.size
+                if n == 0:
+                    point = lo = hi = np.nan
+                elif n == 1:
+                    point = float(np.mean(v))
+                    lo = hi = np.nan
+                else:
+                    point = float(np.median(v) if aggr == "median" else np.mean(v))
+                    lo, hi = bootstrap_ci(v, B=2000, alpha=0.05, use_median=(aggr == "median"))
+
+                macro_rows.append({
+                    "method": m,
+                    f"macro_{metric}_{aggr}": point,
+                    "ci_lo": lo,
+                    "ci_hi": hi,
+                    "n_patients": int(n),
+                })
+
+            macro_df = pd.DataFrame(macro_rows)
+            macro_csv = os.path.join(outdir, f"macro_avg_{metric}_{aggr}.csv")
+            macro_df.to_csv(macro_csv, index=False)
+            print(f"[done] metric={metric} aggr={aggr} -> files saved in {outdir}")
+
+    print('All metrics processed.')
 
 
 def _parse_args_and_run():
