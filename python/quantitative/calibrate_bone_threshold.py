@@ -92,6 +92,12 @@ def main():
     methods = list(METHOD_DIRS.keys()) if args.methods == ["ALL"] else args.methods
 
     clean_stems = get_clean_stems(args.pairwise_raw, args.dice_thresh)
+    # diagnostic: show how many candidate stems were selected and a small sample
+    try:
+        sample_stems = sorted(clean_stems)[:20]
+    except Exception:
+        sample_stems = []
+    print(f"[calibrate] candidate_stems={len(clean_stems)} sample(<=20)={sample_stems} methods={methods}")
 
     # Build per-stem raw rim-value lists (sample-based percentile)
     per_stem_vals = []
@@ -110,6 +116,8 @@ def main():
         n_vox_total += int(vals.size)
 
     if not per_stem_vals:
+        print(f"[calibrate] Collected 0 rim voxels from candidate stems. Check earlier [calibrate] messages in the log for missing files or shape mismatches.")
+        print(f"[calibrate] candidate_stems={len(clean_stems)} methods={methods}")
         raise SystemExit("No rim voxels collected. Check methods, stems, or shapes.")
 
     # Concatenate all rim voxels and compute sample-based percentiles
