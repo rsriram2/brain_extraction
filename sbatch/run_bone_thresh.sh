@@ -3,7 +3,7 @@
 #SBATCH --nodes=1                        # Number of nodes
 #SBATCH --ntasks-per-node=1              # Number of tasks (processes) per node
 #SBATCH --cpus-per-task=8                # Number of CPUs per task (increase if needed)
-#SBATCH --mem=64G                        # Memory per node (increase based on your model size)
+#SBATCH --mem=128G                        # Memory per node (increase based on your model size)
 #SBATCH --time=23:00:00                  # Time limit hrs:min:sec
 #SBATCH --output=bone_thresh_%j.out     # Standard output log
 #SBATCH --error=bone_thresh_%j.err      # Standard error log
