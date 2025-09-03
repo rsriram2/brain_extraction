@@ -28,7 +28,7 @@ python -u "$SCRIPT_PATH" \
   --dice-thresh 0.95 \
   --methods ALL \
   --format both \
-  --bootstrap 1000
+  --bootstrap 199
 
 # Deactivate Conda environment
 echo "Deactivating Conda environment '$ENV_NAME'..."
