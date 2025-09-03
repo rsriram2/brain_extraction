@@ -25,6 +25,7 @@ conda activate $ENV_NAME
 echo "Running Python script '$SCRIPT_PATH' with args..."
 python -u "$SCRIPT_PATH" \
   --out "/users/rsriramb/brain_extraction/results/quantitative/bone_hu_threshold" \
+  --dice-thresh 0.90 \
   --format both \
   --bootstrap 1000
 
