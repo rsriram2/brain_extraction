@@ -78,10 +78,10 @@ def main():
     parser.add_argument('--save-csv', action='store_true', help='Save per-scan CSV and summaries')
     args = parser.parse_args()
 
-    GOLD_DIR = '/dcs05/ciprian/smart/mistie_3/jhu_manual_segmentations/brain_extracted_double'
+    GOLD_DIR = '/dcs05/ciprian/smart/mistie_3/synthstrip_manual_segmentations/brain_extracted_double'
     GOLD_DIRS = [GOLD_DIR]
 
-    BASE = '/dcs05/ciprian/smart/mistie_3/jhu_manual_segmentations'
+    BASE = '/dcs05/ciprian/smart/mistie_3/synthstrip_manual_segmentations'
     METHOD_DIRS: Dict[str, List[str]] = {
         'Brainchop': [os.path.join(BASE, 'brain_mask_brainchop')],
         'HD-CTBET': [os.path.join(BASE, 'brain_mask_hdctbet')],
@@ -242,10 +242,10 @@ def main():
     print(subj_counts.to_string(index=False))
 
     if args.save_csv:
-        per_scan_csv = os.path.join(args.out_dir, 'method_vs_gold_per_scan.csv')
-        method_csv = os.path.join(args.out_dir, 'method_level_scan_summary.csv')
-        subject_mean_csv = os.path.join(args.out_dir, 'method_subject_weighted_mean.csv')
-        coverage_csv = os.path.join(args.out_dir, 'method_coverage.csv')
+        per_scan_csv = os.path.join(args.out_dir, 'method_vs_gold_per_scan_synth.csv')
+        method_csv = os.path.join(args.out_dir, 'method_level_scan_summary_synth.csv')
+        subject_mean_csv = os.path.join(args.out_dir, 'method_subject_weighted_mean_synth.csv')
+        coverage_csv = os.path.join(args.out_dir, 'method_coverage_synth.csv')
 
         df_report.to_csv(per_scan_csv, index=False)
         method_level.to_csv(method_csv, index=False)
