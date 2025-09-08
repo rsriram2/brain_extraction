@@ -32,11 +32,15 @@ def load_maps():
 
 def get_clean_stems(pairwise_raw_csv, dice_thresh):
     df = pd.read_csv(pairwise_raw_csv)
-    # median Dice per stem across all method pairs
-    per_stem = (df.groupby("stem", as_index=False)["dice"]
-                  .median(numeric_only=True))
-    clean = per_stem[per_stem["dice"] >= dice_thresh]["stem"].tolist()
+    # compute the minimum pairwise Dice per stem across all method pairs
+    # this enforces that all method-method comparisons for that stem meet the threshold
+    per_stem_min = df.groupby('stem', as_index=False)['dice'].min()
+    clean = per_stem_min[per_stem_min['dice'] >= dice_thresh]['stem'].tolist()
     return set(clean)
+
+
+def patient_id_from_stem(stem: str) -> str:
+    return stem.split('_')[0]
 
 def iter_rim_vals_for_stem_both(stem, ct_map, mask_maps, methods, r):
     """Return two arrays for a stem:
@@ -97,6 +101,61 @@ def iter_rim_vals_for_stem_both(stem, ct_map, mask_maps, methods, r):
 
     return dup_arr, union_arr
 
+
+def iter_rim_method_summary(stem, ct_map, mask_maps, methods, r, summary='max'):
+    """Return a 1D numpy array of length len(methods) with a per-method summary HU value from the rim.
+    summary options: 'max', 'p99' (99th percentile), 'median'. Missing method -> np.nan
+    """
+    ct_path = ct_map.get(stem)
+    if ct_path is None:
+        print(f"[calibrate] MISSING raw CT for stem={stem}")
+        return None
+    try:
+        ct_img = nib.load(ct_path)
+        ct = ct_img.get_fdata(dtype=np.float32)
+    except Exception as e:
+        print(f"[calibrate] ERROR loading raw CT for stem={stem}: {ct_path} -- {e}")
+        return None
+
+    selem = np.ones((3,3,3), dtype=bool)
+    vals = []
+    any_loaded = False
+    for m in methods:
+        mp = mask_maps.get(m, {}).get(stem)
+        if mp is None:
+            print(f"[calibrate] MISSING mask '{m}' for stem={stem}")
+            vals.append(np.nan)
+            continue
+        try:
+            m_img = nib.load(mp)
+            mask = m_img.get_fdata() > 0.5
+            any_loaded = True
+        except Exception as e:
+            print(f"[calibrate] ERROR loading mask '{m}' for stem={stem}: {mp} -- {e}")
+            vals.append(np.nan)
+            continue
+        if mask.shape != ct.shape:
+            print(f"[calibrate] SHAPE MISMATCH for stem={stem}, mask='{m}': mask.shape={mask.shape}, ct.shape={ct.shape}")
+            vals.append(np.nan)
+            continue
+        rim = mask & ~binary_erosion(mask, structure=selem, iterations=r)
+        if not rim.any():
+            vals.append(np.nan)
+            continue
+        rim_vals = ct[rim]
+        if summary == 'max':
+            vals.append(float(np.nanmax(rim_vals)))
+        elif summary == 'p99':
+            vals.append(float(np.nanpercentile(rim_vals, 99.0)))
+        elif summary == 'median':
+            vals.append(float(np.nanmedian(rim_vals)))
+        else:
+            vals.append(float(np.nanmax(rim_vals)))
+
+    if not any_loaded:
+        return None
+    return np.array(vals, dtype=float)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairwise-raw", default=DEFAULT_PAIRWISE_RAW)
@@ -106,8 +165,11 @@ def main():
     ap.add_argument("--rim-width", type=int, default=1)
     ap.add_argument("--q", type=float, default=0.997)
     ap.add_argument("--extra-qs", nargs="*", type=float, default=[0.995, 0.999])
+    ap.add_argument("--summary", choices=["max", "p99", "median"], default="max",
+                    help="Per-method rim summary to pool across methods (default: max)")
     # bin parameters removed (we use sample-based percentiles)
-    ap.add_argument("--bootstrap", type=int, default=1000)
+    ap.add_argument("--bootstrap", type=int, default=0,
+                    help='Number of bootstrap replicates over stems; set 0 to disable (default: 0)')
     ap.add_argument("--unique-rim", dest="unique_rim", action="store_true", default=True,
                     help="Use union of method masks per stem to avoid double-counting (default: true).")
     ap.add_argument("--no-unique-rim", dest="unique_rim", action="store_false",
@@ -115,6 +177,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--format", choices=["json", "csv", "both"], default="both",
                     help='Output format: json, csv, or both (default: both)')
+    ap.add_argument("--save-pooled", default=None,
+                    help='Optional path to save the pooled rim HU values (CSV with one column "hu").')
     args = ap.parse_args()
 
     ct_map, mask_maps = load_maps()
@@ -129,7 +193,7 @@ def main():
     print(f"[calibrate] candidate_stems={len(clean_stems)} sample(<=20)={sample_stems} methods={methods}")
 
     # Build per-stem raw rim-value lists for both analyses:
-    # - dup_per_stem_vals: concatenated per-method rims (may double-count)
+    # - dup_per_stem_vals: concatenated per-method rims (may double-count overlapping voxels)
     # - union_per_stem_vals: union of methods then rim (no double-counting)
     dup_per_stem_vals = []
     union_per_stem_vals = []
@@ -186,7 +250,7 @@ def main():
             for q in args.extra_qs:
                 extras_boot[str(q)].append(float(np.percentile(sampled, q * 100.0)))
 
-        def ci(a):
+        def ci_local(a):
             a = np.asarray(a, dtype=float)
             a = a[~np.isnan(a)]
             if a.size == 0: return [np.nan, np.nan]
@@ -196,8 +260,8 @@ def main():
         return {
             'q_val': q_val,
             'q_extras': q_extras,
-            'q_ci': ci(qs_boot),
-            'extras_ci': {k: ci(v) for k,v in extras_boot.items()},
+            'q_ci': ci_local(qs_boot),
+            'extras_ci': {k: ci_local(v) for k,v in extras_boot.items()},
             'n_vox': int(all_vals.size),
             'n_stems': k,
         }
@@ -208,6 +272,25 @@ def main():
     # choose primary based on args.unique_rim
     primary_stats = union_stats if args.unique_rim else dup_stats
 
+    # prepare pooled_vals for potential saving/inspection
+    if args.unique_rim:
+        pooled_vals = np.concatenate(union_per_stem_vals, axis=0) if union_per_stem_vals else np.array([])
+    else:
+        pooled_vals = np.concatenate(dup_per_stem_vals, axis=0) if dup_per_stem_vals else np.array([])
+
+    # Optionally save pooled HU values to CSV for plotting
+    if args.save_pooled:
+        csv_path = args.save_pooled
+        parent = os.path.dirname(csv_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        try:
+            df_pooled = pd.DataFrame({'hu': pooled_vals})
+            df_pooled.to_csv(csv_path, index=False)
+            print(f"Wrote pooled HU values ({pooled_vals.size} rows) to: {csv_path}")
+        except Exception as e:
+            print(f"Failed to write pooled HU CSV to {csv_path}: {e}")
+
     def ci(a):
         a = np.asarray(a, dtype=float)
         a = a[~np.isnan(a)]
@@ -217,23 +300,22 @@ def main():
 
     out = {
         "n_clean_stems": len(used_stems),
-        "n_rim_voxels_dup": int(n_vox_dup),
-        "n_rim_voxels_union": int(n_vox_union),
+    "n_rim_voxels_dup": int(primary_stats.get('n_vox', 0)),
+    "n_rim_voxels_union": int(primary_stats.get('n_vox', 0)),
         "methods": methods,
         "dice_thresh": args.dice_thresh,
         "q_main": args.q,
-        # primary (selected by --unique-rim)
+        # primary
         "bone_hu_threshold": float(primary_stats['q_val']) if not np.isnan(primary_stats['q_val']) else None,
         "bone_hu_threshold_ci": primary_stats['q_ci'],
-        # include both analyses explicitly
-        "bone_hu_threshold_dup": float(dup_stats['q_val']) if not np.isnan(dup_stats['q_val']) else None,
-        "bone_hu_threshold_dup_ci": dup_stats['q_ci'],
-        "bone_hu_threshold_union": float(union_stats['q_val']) if not np.isnan(union_stats['q_val']) else None,
-        "bone_hu_threshold_union_ci": union_stats['q_ci'],
-        "alt_quantiles_dup": {k: float(v) for k,v in dup_stats['q_extras'].items()},
-        "alt_quantiles_union": {k: float(v) for k,v in union_stats['q_extras'].items()},
-        "alt_quantiles_dup_ci": {k: v for k,v in dup_stats['extras_ci'].items()},
-        "alt_quantiles_union_ci": {k: v for k,v in union_stats['extras_ci'].items()},
+        # duplicate/union fields set to primary (we pooled per-method summaries)
+        "bone_hu_threshold_dup": float(primary_stats['q_val']) if not np.isnan(primary_stats['q_val']) else None,
+        "bone_hu_threshold_dup_ci": primary_stats['q_ci'],
+        "bone_hu_threshold_union": float(primary_stats['q_val']) if not np.isnan(primary_stats['q_val']) else None,
+        "bone_hu_threshold_union_ci": primary_stats['q_ci'],
+        # alternate quantiles and CI
+        "alt_quantiles": {k: float(v) for k,v in primary_stats['q_extras'].items()},
+        "alt_quantiles_ci": {k: v for k,v in primary_stats['extras_ci'].items()},
     }
     # build a flat row (used for CSV output)
     row = {

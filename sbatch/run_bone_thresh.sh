@@ -24,11 +24,16 @@ conda activate $ENV_NAME
 # Run the Python script with explicit args
 echo "Running Python script '$SCRIPT_PATH' with args..."
 python -u "$SCRIPT_PATH" \
-  --out "/users/rsriramb/brain_extraction/results/quantitative/bone_hu_threshold" \
-  --dice-thresh 0.95 \
+  --pairwise-raw "/users/rsriramb/brain_extraction/results/quantitative/pairwise_2x2_metrics_all_scans.csv" \
+  --dice-thresh 0.97 \
   --methods ALL \
-  --format both \
-  --bootstrap 199
+  --rim-width 1 \
+  --q 0.997 \
+  --unique-rim \
+  --bootstrap 0 \
+  --save-pooled "/users/rsriramb/brain_extraction/results/quantitative/pooled_rim_hu.csv" \
+  --out "/users/rsriramb/brain_extraction/results/quantitative/bone_hu_threshold" \
+  --format both
 
 # Deactivate Conda environment
 echo "Deactivating Conda environment '$ENV_NAME'..."
