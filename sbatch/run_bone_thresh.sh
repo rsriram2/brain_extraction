@@ -25,7 +25,7 @@ conda activate $ENV_NAME
 echo "Running Python script '$SCRIPT_PATH' with args..."
 python -u "$SCRIPT_PATH" \
   --pairwise-raw "/users/rsriramb/brain_extraction/results/quantitative/pairwise_2x2_metrics_all_scans.csv" \
-  --dice-thresh 0.97 \
+  --dice-thresh 0.95 \
   --methods ALL \
   --rim-width 1 \
   --q 0.997 \
