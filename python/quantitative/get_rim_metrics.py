@@ -36,7 +36,7 @@ def get_ct_metadata(ct_img: nib.Nifti1Image, stem: str) -> dict:
     }
 
 def rim_metrics_from_mask(ct_img: nib.Nifti1Image, mask_path: str, method: str, r: int = 1,
-                          bone: float = 70.0, air: float = -200.0,
+                          bone: float = 1000.0, air: float = -200.0,
                           brain_min: float = 20.0, brain_max: float = 60.0) -> dict:
     # CT once, mask now
     ct = ct_img.get_fdata(dtype=np.float32)
