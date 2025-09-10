@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=pairwise_shard           # Job name
 #  Run a single test shard (change back to 0-49 or desired range for full run)
-#SBATCH --array=0-0
+#SBATCH --array=1-99
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
