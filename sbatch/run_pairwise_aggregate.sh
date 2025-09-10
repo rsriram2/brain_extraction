@@ -11,8 +11,8 @@
 module load conda
 conda activate my_env
 
-SHARD_DIR="/users/rsriramb/brain_extraction/results/quantitative/pairwise_shards"
-MERGED_CSV="/users/rsriramb/brain_extraction/results/quantitative/pairwise_2x2_metrics_all_scans.csv"
+SHARD_DIR="/users/rsriramb/brain_extraction/results/quantitative/pairwise_comparison/pairwise_shards"
+MERGED_CSV="/users/rsriramb/brain_extraction/results/quantitative/pairwise_comparison/pairwise_2x2_metrics_all_scans.csv"
 
 PYTHON_SCRIPT="/users/rsriramb/brain_extraction/python/quantitative/merge_pairwise_shards.py"
 
