@@ -145,21 +145,9 @@ candidate_stems = [
 
 # If user supplied a stems CSV, restrict candidate_stems to that list (intersect)
 if args.stems_csv:
-    import csv
-    if not os.path.exists(args.stems_csv):
-        raise SystemExit(f"stems CSV not found: {args.stems_csv}")
     stems_from_csv = []
-    with open(args.stems_csv, newline='') as fh:
-        reader = csv.DictReader(fh)
-        if reader.fieldnames and 'stem' in reader.fieldnames:
-            for row in reader:
-                stems_from_csv.append(row['stem'])
-        else:
-            fh.seek(0)
-            for r in csv.reader(fh):
-                if len(r) > 0:
-                    stems_from_csv.append(r[0])
-
+    df_stems = pd.read_csv(args.stems_csv, dtype=str, header=0)
+    stems_from_csv = df_stems['stem'].dropna().astype(str).tolist()
     stems_set = set(stems_from_csv)
     candidate_stems = [s for s in candidate_stems if s in stems_set]
 
