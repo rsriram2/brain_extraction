@@ -21,7 +21,7 @@ METHOD_DIRS = {
     'CTBET': '/dcs05/ciprian/smart/mistie_3/data/brain_mask_original',
     'CT_BET': '/dcs05/ciprian/smart/mistie_3/data/brain_mask_ctbet',
 }
-OUT_CSV_RAW   = os.path.join(DATA_DIR, "pairwise_2x2_metrics_all_scans.csv")
+OUT_CSV_RAW   = "/users/rsriramb/brain_extraction/results/quantitative/pairwise_comparison/pairwise_2x2_metrics_all_scans.csv"
 
 # ===== helpers for geometry and metrics =====
 def stem(p: str) -> str:
