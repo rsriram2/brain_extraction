@@ -24,7 +24,7 @@ conda activate $ENV_NAME
 
 # Configure shard parameters (set to 1 for test; revert to 50 for full run)
 # Adjust NUM_SHARDS to the number of shards you want and update the SBATCH --array directive above accordingly
-NUM_SHARDS=1
+NUM_SHARDS=100
 SHARD_ID=${SLURM_ARRAY_TASK_ID}
 
 # Output directory for partial shard CSVs (should be a fast shared location or scratch)
@@ -32,12 +32,9 @@ OUT_DIR="/users/rsriramb/brain_extraction/results/quantitative/pairwise_shards_r
 mkdir -p "$OUT_DIR"
 OUT_PARTIAL="${OUT_DIR}/pairwise_shard_${SHARD_ID}.csv"
 
-# Process only the stems in this CSV and skip the CTbet_Docker method (per recent script changes)
-STEMS_CSV="/users/rsriramb/brain_extraction/results/quantitative/skipped_ctdock_stems_list.csv"
-SKIP_METHOD="CTbet_Docker"
-
+# Run the script on the full candidate set for this shard
 echo "Running shard ${SHARD_ID} of ${NUM_SHARDS} -> ${OUT_PARTIAL}"
-python -u "$SCRIPT_PATH" --num-shards ${NUM_SHARDS} --shard-id ${SHARD_ID} --out-partial "$OUT_PARTIAL" --stems-csv "$STEMS_CSV" --skip-method "$SKIP_METHOD"
+python -u "$SCRIPT_PATH" --num-shards ${NUM_SHARDS} --shard-id ${SHARD_ID} --out-partial "$OUT_PARTIAL"
 
 echo "Deactivating Conda environment '$ENV_NAME'..."
 conda deactivate

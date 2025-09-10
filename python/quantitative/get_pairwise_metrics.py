@@ -113,8 +113,7 @@ parser.add_argument("--num-shards", type=int, default=1, help="Total number of s
 parser.add_argument("--shard-id", type=int, default=0, help="Zero-based shard id to process (0..num_shards-1)")
 parser.add_argument("--out-partial", type=str, default=None, help="If set, write partial CSV for this shard to the given path and exit (skips aggregation)")
 parser.add_argument("--merge-only", action="store_true", help="Load existing raw CSV and run aggregation/plots only (no per-scan compute)")
-parser.add_argument("--stems-csv", type=str, default=None, help="Optional CSV (one column 'stem' or plain list) with stems to process (limits candidate stems)")
-parser.add_argument("--skip-method", type=str, default="CTbet_Docker", help="Method name to skip when processing these stems (default: CTbet_Docker)")
+# no skip-method argument: process all methods present for each stem
 args = parser.parse_args()
 
 if args.num_shards > 1:
@@ -126,10 +125,7 @@ if args.num_shards > 1:
     print(f"Shard mode: num_shards={args.num_shards} shard_id={args.shard_id} stems={len(candidate_stems)}")
 else:
     print(f"Running single-job mode on {len(candidate_stems)} stems")
-
-if args.stems_csv:
-    print(f"Limiting candidate stems to CSV: {args.stems_csv} (remaining {len(candidate_stems)})")
-print(f"Skipping method when loading per-stem masks: {args.skip_method}")
+# processing all present methods for each stem
 
 exclude = {
     '6109-317_20150302_0647_ct','6142-308_20150610_0707_ct','6193-324_20150924_1431_ct',
@@ -143,15 +139,6 @@ candidate_stems = [
     if s not in exclude and not patient_id_from_stem(s).startswith(exclude_prefixes)
 ]
 
-# If user supplied a stems CSV, restrict candidate_stems to that list (intersect)
-if args.stems_csv:
-    stems_from_csv = []
-    df_stems = pd.read_csv(args.stems_csv, dtype=str, header=0)
-    stems_from_csv = df_stems['stem'].dropna().astype(str).tolist()
-    stems_set = set(stems_from_csv)
-    candidate_stems = [s for s in candidate_stems if s in stems_set]
-
-# If merge-only was requested, load existing aggregated CSV and skip per-scan processing
 if args.merge_only:
     if not os.path.exists(OUT_CSV_RAW):
         raise SystemExit(f"merge-only requested but raw CSV not found at {OUT_CSV_RAW}")
@@ -163,9 +150,9 @@ else:
     rows = []
     for s in candidate_stems:
         imgs, masks = {}, {}
-        aff, shape = None, None
-        # respect skip-method CLI flag: only consider methods present for this stem and not the skip method
-        methods_here = sorted([m for m in all_stems[s] if m != args.skip_method])
+        shape = None
+        # consider all methods present for this stem
+        methods_here = sorted(all_stems[s])
 
         # only keep methods that actually have a file for this stem
         available_methods = [m for m in methods_here if method_maps.get(m, {}).get(s)]
@@ -178,10 +165,11 @@ else:
             p = method_maps[m][s]
             img, arr = load_mask_bool(p)
             if shape is None:
-                shape, aff = img.shape, img.affine
+                shape = img.shape
             else:
-                if img.shape != shape or not np.allclose(img.affine, aff, atol=1e-3):
-                    ok = False; break
+                if img.shape != shape:
+                    ok = False
+                    break
             imgs[m], masks[m] = img, arr
         if not ok:
             continue
@@ -193,8 +181,6 @@ else:
             tp, fp, fn, tn = confusion_2x2(a, b)
 
             # symmetric sensitivity/specificity: average A->B and B->A
-            sens_A_B = sensitivity(tp, fn)
-            sens_B_A = sensitivity(tp, fp) if False else None  # placeholder
             # compute both directions properly using masks
             sens_AB = sensitivity(np.count_nonzero(a & b), np.count_nonzero(a & ~b))
             sens_BA = sensitivity(np.count_nonzero(a & b), np.count_nonzero(b & ~a))
