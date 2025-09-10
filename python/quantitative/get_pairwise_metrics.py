@@ -113,6 +113,8 @@ parser.add_argument("--num-shards", type=int, default=1, help="Total number of s
 parser.add_argument("--shard-id", type=int, default=0, help="Zero-based shard id to process (0..num_shards-1)")
 parser.add_argument("--out-partial", type=str, default=None, help="If set, write partial CSV for this shard to the given path and exit (skips aggregation)")
 parser.add_argument("--merge-only", action="store_true", help="Load existing raw CSV and run aggregation/plots only (no per-scan compute)")
+parser.add_argument("--stems-csv", type=str, default=None, help="Optional CSV (one column 'stem' or plain list) with stems to process (limits candidate stems)")
+parser.add_argument("--skip-method", type=str, default="CTbet_Docker", help="Method name to skip when processing these stems (default: CTbet_Docker)")
 args = parser.parse_args()
 
 if args.num_shards > 1:
@@ -125,6 +127,10 @@ if args.num_shards > 1:
 else:
     print(f"Running single-job mode on {len(candidate_stems)} stems")
 
+if args.stems_csv:
+    print(f"Limiting candidate stems to CSV: {args.stems_csv} (remaining {len(candidate_stems)})")
+print(f"Skipping method when loading per-stem masks: {args.skip_method}")
+
 exclude = {
     '6109-317_20150302_0647_ct','6142-308_20150610_0707_ct','6193-324_20150924_1431_ct',
     '6257-335_20160118_1150_ct','6418-193_20161228_1248_ct','6470-296_20170602_0607_ct',
@@ -136,6 +142,26 @@ candidate_stems = [
     s for s in candidate_stems 
     if s not in exclude and not patient_id_from_stem(s).startswith(exclude_prefixes)
 ]
+
+# If user supplied a stems CSV, restrict candidate_stems to that list (intersect)
+if args.stems_csv:
+    import csv
+    if not os.path.exists(args.stems_csv):
+        raise SystemExit(f"stems CSV not found: {args.stems_csv}")
+    stems_from_csv = []
+    with open(args.stems_csv, newline='') as fh:
+        reader = csv.DictReader(fh)
+        if reader.fieldnames and 'stem' in reader.fieldnames:
+            for row in reader:
+                stems_from_csv.append(row['stem'])
+        else:
+            fh.seek(0)
+            for r in csv.reader(fh):
+                if len(r) > 0:
+                    stems_from_csv.append(r[0])
+
+    stems_set = set(stems_from_csv)
+    candidate_stems = [s for s in candidate_stems if s in stems_set]
 
 # If merge-only was requested, load existing aggregated CSV and skip per-scan processing
 if args.merge_only:
@@ -150,10 +176,17 @@ else:
     for s in candidate_stems:
         imgs, masks = {}, {}
         aff, shape = None, None
-        methods_here = sorted(all_stems[s])
-        # load and check geometry
+        # respect skip-method CLI flag: only consider methods present for this stem and not the skip method
+        methods_here = sorted([m for m in all_stems[s] if m != args.skip_method])
+
+        # only keep methods that actually have a file for this stem
+        available_methods = [m for m in methods_here if method_maps.get(m, {}).get(s)]
+        if len(available_methods) < 2:
+            continue
+
+        # load and check geometry for available methods only
         ok = True
-        for m in methods_here:
+        for m in available_methods:
             p = method_maps[m][s]
             img, arr = load_mask_bool(p)
             if shape is None:
@@ -166,8 +199,8 @@ else:
             continue
 
         pid = patient_id_from_stem(s)
-        # pairwise metrics (per scan)
-        for A, B in itertools.combinations(methods_here, 2):
+        # pairwise metrics (per scan) over available methods
+        for A, B in itertools.combinations(available_methods, 2):
             a, b = masks[A], masks[B]
             tp, fp, fn, tn = confusion_2x2(a, b)
 
