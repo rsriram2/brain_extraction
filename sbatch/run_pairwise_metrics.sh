@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=pairwise_shard           # Job name
-#  Running 100 shards (IDs 0..99); scheduler will decide concurrency
-#SBATCH --array=0-49
+#  Run a single test shard (change back to 0-49 or desired range for full run)
+#SBATCH --array=0-0
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -22,9 +22,9 @@ SCRIPT_PATH="/users/rsriramb/brain_extraction/python/quantitative/get_pairwise_m
 echo "Activating Conda environment '$ENV_NAME'..."
 conda activate $ENV_NAME
 
-# Configure shard parameters
+# Configure shard parameters (set to 1 for test; revert to 50 for full run)
 # Adjust NUM_SHARDS to the number of shards you want and update the SBATCH --array directive above accordingly
-NUM_SHARDS=50
+NUM_SHARDS=1
 SHARD_ID=${SLURM_ARRAY_TASK_ID}
 
 # Output directory for partial shard CSVs (should be a fast shared location or scratch)
