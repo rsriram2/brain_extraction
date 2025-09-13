@@ -8,6 +8,46 @@ from typing import Dict, Tuple, List
 from medpy.metric import binary as medpy_binary
 from medpy.metric.binary import hd95 as medpy_hd95
 
+# Explicit mapping from method prediction filenames to gold standard filenames.
+# Keys and values include the full filenames (with extensions). Extend this dict with all mappings you have.
+filename_mapping = {
+    "01_BRAIN_1_Anonymized.nii.gz": "01_Manual_Mask_1_Reader_1.nii.gz",
+    "02_BRAIN_1_Anonymized.nii.gz": "02_Manual_Mask_1_Reader_1.nii.gz",
+    "03_BRAIN_1_Anonymized.nii.gz": "03_Manual_Mask_1_Reader_1.nii.gz",
+    "04_BRAIN_1_Anonymized.nii.gz": "04_Manual_Mask_1_Reader_1.nii.gz",
+    "05_BRAIN_1_Anonymized.nii.gz": "05_Manual_Mask_1_Reader_1.nii.gz",
+    "06_BRAIN_1_Anonymized.nii.gz": "06_Manual_Mask_1_Reader_1.nii.gz",
+    "07_BRAIN_1_Anonymized.nii.gz": "07_Manual_Mask_1_Reader_1.nii.gz",
+    "08_BRAIN_1_Anonymized.nii.gz": "08_Manual_Mask_1_Reader_1.nii.gz",
+    "09_BRAIN_1_Anonymized.nii.gz": "09_Manual_Mask_1_Reader_1.nii.gz",
+    "10_BRAIN_1_Anonymized.nii.gz": "10_Manual_Mask_1_Reader_1.nii.gz",
+    "11_BRAIN_1_Anonymized.nii.gz": "11_Manual_Mask_1_Reader_1.nii.gz",
+    "12_BRAIN_1_Anonymized.nii.gz": "12_Manual_Mask_1_Reader_1.nii.gz",
+    "13_BRAIN_1_Anonymized.nii.gz": "13_Manual_Mask_1_Reader_1.nii.gz",
+    "14_BRAIN_1_Anonymized.nii.gz": "14_Manual_Mask_1_Reader_1.nii.gz",
+    "15_BRAIN_1_Anonymized.nii.gz": "15_Manual_Mask_1_Reader_1.nii.gz",
+    "16_BRAIN_1_Anonymized.nii.gz": "16_Manual_Mask_1_Reader_1.nii.gz",
+    "17_BRAIN_1_Anonymized.nii.gz": "17_Manual_Mask_1_Reader_1.nii.gz",
+    "18_BRAIN_1_Anonymized.nii.gz": "18_Manual_Mask_1_Reader_1.nii.gz",
+    "19_BRAIN_1_Anonymized.nii.gz": "19_Manual_Mask_1_Reader_1.nii.gz",
+    "20_BRAIN_1_Anonymized.nii.gz": "20_Manual_Mask_1_Reader_1.nii.gz",
+    "21_BRAIN_1_Anonymized.nii.gz": "21_Manual_Mask_1_Reader_1.nii.gz",
+    "22_BRAIN_1_Anonymized.nii.gz": "22_Manual_Mask_1_Reader_1.nii.gz",
+    "23_BRAIN_1_Anonymized.nii.gz": "23_Manual_Mask_1_Reader_1.nii.gz",
+    "24_BRAIN_1_Anonymized.nii.gz": "24_Manual_Mask_1_Reader_1.nii.gz",
+    "25_BRAIN_1_Anonymized.nii.gz": "25_Manual_Mask_1_Reader_1.nii.gz",
+    "26_BRAIN_1_Anonymized.nii.gz": "26_Manual_Mask_1_Reader_1.nii.gz",
+    "27_BRAIN_1_Anonymized.nii.gz": "27_Manual_Mask_1_Reader_1.nii.gz",
+    "28_BRAIN_1_Anonymized.nii.gz": "28_Manual_Mask_1_Reader_2.nii.gz",  # Only Reader_2 available per your list
+    "29_BRAIN_1_Anonymized.nii.gz": "29_Manual_Mask_1_Reader_1.nii.gz",
+    "30_BRAIN_1_Anonymized.nii.gz": "30_Manual_Mask_1_Reader_1.nii.gz",
+    "31_BRAIN_1_Anonymized.nii.gz": "31_Manual_Mask_1_Reader_1.nii.gz",
+    "32_BRAIN_1_Anonymized.nii.gz": "32_Manual_Mask_1_Reader_1.nii.gz",
+    "33_BRAIN_1_Anonymized.nii.gz": "33_Manual_Mask_1_Reader_1.nii.gz",
+    "34_BRAIN_1_Anonymized.nii.gz": "34_Manual_Mask_1_Reader_1.nii.gz",
+    "35_BRAIN_1_Anonymized.nii.gz": "35_Manual_Mask_1_Reader_1.nii.gz",
+}
+
 def stem(p: str) -> str:
     base = os.path.basename(p)
     for suf in (".nii.gz", ".nii"):
@@ -106,10 +146,17 @@ def main():
     out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
 
-    print('Indexing gold masks...')
-    gold_index = build_file_index(GOLD_DIRS)
-    gold_keys = sorted(list(gold_index.keys()))
-    print(f'Found {len(gold_keys)} gold masks (expected ~50).')
+    print('Indexing gold masks (all gold files)...')
+    gold_index = build_file_index(GOLD_DIRS)  # (pid, stem) -> path
+    print(f'Total gold mask files indexed: {len(gold_index)}')
+
+    # Build a reverse lookup from gold filename to path (including extension)
+    gold_filename_to_path: Dict[str, str] = {}
+    for (_, stem_id), path in gold_index.items():
+        base = os.path.basename(path)
+        gold_filename_to_path[base] = path
+
+    # We will iterate based on mapping entries that actually exist in any method directory.
 
     # index method predictions
     method_indexes: Dict[str, Dict[Tuple[str, str], str]] = {}
@@ -118,43 +165,55 @@ def main():
         print(f'Method {m}: {len(method_indexes[m])} masks indexed')
 
     rows = []
+    missing_gold = 0
+    missing_pred: Dict[str, int] = {m: 0 for m in method_indexes.keys()}
+    used_pairs = 0
 
-    for pid, stem_id in gold_keys:
-        gold_path = gold_index[(pid, stem_id)]
+    # Iterate through mapping; determine patient id from method filename stem (without extension)
+    for method_filename, gold_filename in filename_mapping.items():
+        method_stem = stem(method_filename)  # e.g., 01_BRAIN_1_Anonymized
+        pid = patient_id_from_stem(method_stem)
+
+        gold_path = gold_filename_to_path.get(gold_filename)
+        if gold_path is None:
+            print(f'[WARN] Gold file not found for mapping value {gold_filename}')
+            missing_gold += 1
+            continue
         try:
             gold_img, gold_arr = load_mask_bool(gold_path)
         except Exception as e:
             print(f'Failed to load gold {gold_path}: {e}')
             continue
 
-        # compute reference voxel volume using gold header
         vox_ml = voxel_volume_ml_from_img(gold_img)
         icv_gold = float(gold_arr.sum() * vox_ml)
 
+        # For each method, look for the method filename in its index (match by full stem in index values)
         for method_name, idx in method_indexes.items():
-            if (pid, stem_id) not in idx:
-                # method did not produce a mask for this gold scan
+            # Find a prediction path whose basename matches the method filename
+            pred_path = None
+            for (_pid, pred_stem), p_path in idx.items():
+                if os.path.basename(p_path) == method_filename:
+                    pred_path = p_path
+                    break
+            if pred_path is None:
+                missing_pred[method_name] += 1
                 continue
-            pred_path = idx[(pid, stem_id)]
             try:
                 pred_img, pred_arr = load_mask_bool(pred_path)
             except Exception as e:
                 print(f'Failed to load pred {pred_path}: {e}')
                 continue
 
-            # enforce geometry consistency check (shape)
             if pred_arr.shape != gold_arr.shape:
                 print(f'Geometry mismatch: gold {gold_path} vs pred {pred_path} -> skipping')
                 continue
 
             tp, fp, fn, tn = confusion_2x2(gold_arr, pred_arr)
-
             dice_val = dice_from_conf(tp, fp, fn)
             iou_val = iou_from_conf(tp, fp, fn)
             sens = sensitivity_from_conf(tp, fn)
             spec = specificity_from_conf(tn, fp)
-
-            # MSD/HD95: spacing from reference (gold_img)
             spacing = tuple(map(float, gold_img.header.get_zooms()[:3]))
             try:
                 msd_val = float(medpy_binary.asd(gold_arr.astype(bool), pred_arr.astype(bool), voxelspacing=spacing))
@@ -164,13 +223,12 @@ def main():
                 hd95_val = float(medpy_hd95(gold_arr.astype(bool), pred_arr.astype(bool), voxelspacing=spacing))
             except Exception:
                 hd95_val = np.nan
-
             icv_pred = float(pred_arr.sum() * vox_ml)
             delta_icv_ml = icv_pred - icv_gold
 
             rows.append({
                 'patient_id': pid,
-                'stem': stem_id,
+                'stem': method_stem,
                 'method_A': method_name,
                 'method_B': 'GoldManual',
                 'dice': dice_val,
@@ -185,6 +243,13 @@ def main():
                 'gold_path': gold_path,
                 'pred_path': pred_path,
             })
+            used_pairs += 1
+
+    print(f'Mapped comparisons generated: {used_pairs}')
+    if missing_gold:
+        print(f'Gold files missing for {missing_gold} mapping entries.')
+    for m, c in missing_pred.items():
+        print(f'Method {m}: {c} mapping entries had no prediction file')
 
     df = pd.DataFrame(rows)
     print(f'Computed {len(df)} method-vs-gold rows')
@@ -199,7 +264,8 @@ def main():
 
     # ---------------- Aggregations ----------------
     coverage_rows = []
-    gold_scan_count = len(gold_keys)
+    # gold_scan_count defined as number of unique gold filenames successfully matched
+    gold_scan_count = len(set([r['gold_path'] for r in rows])) if rows else 0
     for m in METHOD_DIRS.keys():
         preds = df[df['method_A'] == m]
         n_scans = preds[['patient_id', 'stem']].drop_duplicates().shape[0]
