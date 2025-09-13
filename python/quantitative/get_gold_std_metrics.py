@@ -78,10 +78,10 @@ def main():
     parser.add_argument('--save-csv', action='store_true', help='Save per-scan CSV and summaries')
     args = parser.parse_args()
 
-    GOLD_DIR = '/dcs05/ciprian/smart/mistie_3/mistie_3_manual_segmentations'
+    GOLD_DIR = '/dcs05/ciprian/smart/mistie_3/synthstrip_manual_segmentations/brain_mask_manual'
     GOLD_DIRS = [GOLD_DIR]
 
-    BASE = '/dcs05/ciprian/smart/mistie_3/data'
+    BASE = '/dcs05/ciprian/smart/mistie_3/synthstrip_manual_segmentations'
     METHOD_DIRS: Dict[str, List[str]] = {
         'Brainchop': [os.path.join(BASE, 'brain_mask_brainchop')],
         'HD-CTBET': [os.path.join(BASE, 'brain_mask_hdctbet')],
@@ -242,10 +242,10 @@ def main():
     print(subj_counts.to_string(index=False))
 
     if args.save_csv:
-        per_scan_csv = os.path.join(args.out_dir, 'method_vs_gold_per_scan_mistie3.csv')
-        method_csv = os.path.join(args.out_dir, 'method_level_scan_summary_mistie3.csv')
-        subject_mean_csv = os.path.join(args.out_dir, 'method_subject_weighted_mean_mistie3.csv')
-        coverage_csv = os.path.join(args.out_dir, 'method_coverage_mistie3.csv')
+        per_scan_csv = os.path.join(args.out_dir, 'method_vs_gold_per_scan_CERMEP-IDB-MRXFDG.csv')
+        method_csv = os.path.join(args.out_dir, 'method_level_scan_summary_CERMEP-IDB-MRXFDG.csv')
+        subject_mean_csv = os.path.join(args.out_dir, 'method_subject_weighted_mean_CERMEP-IDB-MRXFDG.csv')
+        coverage_csv = os.path.join(args.out_dir, 'method_coverage_CERMEP-IDB-MRXFDG.csv')
 
         df_report.to_csv(per_scan_csv, index=False)
         method_level.to_csv(method_csv, index=False)
